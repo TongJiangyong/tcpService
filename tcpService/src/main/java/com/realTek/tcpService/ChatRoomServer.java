@@ -9,11 +9,14 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 /**
  * 网络多客户端聊天室
  * 功能1： 客户端通过Java NIO连接到服务端，支持多客户端的连接
@@ -31,16 +34,15 @@ public class ChatRoomServer {
     private Selector selector = null;
     static final int port = 9999;
     private Charset charset = Charset.forName("UTF-8");
-    //用来记录在线人数，以及昵称
-    //这个程序，简单使用的list来进行过滤
-    private static HashSet<String> users = new HashSet<String>();
+    private int  bufferSize = 1024;
+    private static String msgToServer ="1";
+    private static String msgBroadcast ="123456";
     
-    private static String USER_EXIST = "system message: user exist, please change a name";
-    //相当于自定义协议格式，与客户端协商好
-    private static String USER_CONTENT_SPILIT = "#@#";
-    
-    private static boolean flag = false;
-    
+    private static String splitSymble ="#";
+    //记录连接对象 自己的flag ---自己的channel
+    private Map<String, SocketChannel>  userList= new HashMap<String, SocketChannel>();
+    //记录连接对象 自己的channel ---自己的flag
+    private Map<SocketChannel,String >  userDeleteList= new HashMap<SocketChannel,String>();
     public void init() throws IOException
     {
         selector = Selector.open();
@@ -66,6 +68,7 @@ public class ChatRoomServer {
         }
     }
     
+    //最好return不同的伪代码
     public boolean dealWithSelectionKey(ServerSocketChannel server,SelectionKey sk) throws IOException {
         if(sk.isAcceptable())
         {
@@ -78,30 +81,29 @@ public class ChatRoomServer {
             	//sc有socket相关的信息
             }
             sc.register(selector, SelectionKey.OP_READ);
-            //将此对应的channel设置为准备接受其他客户端请求
+            //将此对应的channel设置为准备接受其他客户端请求,加入一个新的客户端
             sk.interestOps(SelectionKey.OP_ACCEPT);
-            System.out.println("Server is listening from client :" + sc.getRemoteAddress());
-            sc.write(charset.encode("Please input your name."));
+            System.out.println("Server is accepted from a new client :" + sc.getRemoteAddress());
         }
         //处理来自客户端的数据读取请求
         if(sk.isReadable())
         {
-            //返回该SelectionKey对应的 Channel，其中有数据需要读取
-            SocketChannel sc = (SocketChannel)sk.channel(); 
-            ByteBuffer buff = ByteBuffer.allocate(1024);
+            //返回该SelectionKey对应的 Channel，其中有数据需要读取,则读取它送过来的数据
+            SocketChannel sc = (SocketChannel)sk.channel();
+           //获取数据
+            ByteBuffer buff = ByteBuffer.allocate(bufferSize);
             StringBuilder content = new StringBuilder();
             try
             {
                 while(sc.read(buff) > 0)
                 {
                     buff.flip();
-                    content.append(charset.decode(buff));
-                    
+                    content.append(charset.decode(buff));                
                 }
                 //一下的断开方法，仅仅对socket有效好像是，那客户端就通过socket来做吧.....服务器就改动这个.....
                 if(sc.read(buff) == -1){
-                    System.out.println("断开..." 
-                            + sc.socket().getRemoteSocketAddress());            
+                    System.out.println("client disconnection activity" + sc.socket().getRemoteSocketAddress());
+                    //下线通知，更新这里，并更新数据库
                     sc.close();
                     return false;
                 }
@@ -112,75 +114,104 @@ public class ChatRoomServer {
             catch (IOException io)
             {
                 sk.cancel();
+                System.out.println("read or write error");
                 if(sk.channel() != null)
                 {
                     sk.channel().close();
+                    System.out.println("client disconnection client" + sc.socket().getRemoteSocketAddress());
+                    //下线通知，更新这里，并更新数据库
+                    this.clientDisconnect(userList,userDeleteList,sk);
+                    return false;
                 }
             }
             if(content.length() > 0)
             {
-            	
-            	Data reciveData = gson.fromJson(content.toString(), Data.class);
-            	//Data testData=(Data)reciveData.getMsg();
-            	System.out.println("data info:"+reciveData.getMsg());
-/*                String[] arrayContent = content.toString().split(USER_CONTENT_SPILIT);
-                //注册用户
-                if(arrayContent != null && arrayContent.length ==1) {
-                    String name = arrayContent[0];
-                    if(users.contains(name)) {
-                        sc.write(charset.encode(USER_EXIST));
-                        
-                    } else {
-                        users.add(name);
-                        int num = OnlineNum(selector);
-                        String message = "welcome "+name+" to chat room! Online numbers:"+num;
-                        BroadCast(selector, null, message);
-                    }
-                } 
-                //注册完了，发送消息
-                else if(arrayContent != null && arrayContent.length >1){
-                    String name = arrayContent[0];
-                    String message = content.substring(name.length()+USER_CONTENT_SPILIT.length());
-                    message = name + " say " + message;
-                    if(users.contains(name)) {
-                        //不回发给发送此内容的客户端
-                        BroadCast(selector, sc, message);
-                    }
-                }*/
+            	Data reciveData = null;
+            	try{  	
+            		reciveData = gson.fromJson(content.toString(), Data.class);
+            		System.out.println("recive info is "+reciveData.getFlag());
+            	}catch (JsonSyntaxException e)
+                {
+            		System.out.println("data is not format");
+            		return false;
+                }
+            	//获取标志
+            	String[] flag = reciveData.getFlag().split(splitSymble);
+        		//处理初次连接
+        		if(flag[0].equals(msgToServer)){
+        			//初次连接，即为通道进行注册
+        			userList.put(flag[1], sc);
+        			userDeleteList.put(sc, flag[1]);
+        		//处理广播主要是服务器的控制处理，比如发送信息什么的....
+        		}else if(flag[0].equals(msgBroadcast)){
+        			//直接进行转发即可
+        			this.broadCastInfo(selector, sc, content.toString());
+        		//处理互相之间的连接
+        		}else{
+        			if(!userList.containsKey(flag)){
+                        sk.channel().close();
+                        System.out.println("client disconnection activity" + sc.socket().getRemoteSocketAddress());
+                        //错误通知，并更新这里，并更新数据库
+                        sc.close();
+                        return false;	
+        			}
+        			try {
+        				
+        				this.sendToClient(userList,flag[0],content.toString());
+        			} catch (IOException e) {
+        				System.out.println("应该不会出错，大概吧..");
+        				//处理出错，以后碰着再说吧.....
+        				e.printStackTrace();
+        			}
+        		}
             }
             
         }
         return true;
     }
     
-    //TODO 要是能检测下线，就不用这么统计了
-    public static int OnlineNum(Selector selector) {
-        int res = 0;
-        for(SelectionKey key : selector.keys())
-        {
-            Channel targetchannel = key.channel();
-            
-            if(targetchannel instanceof SocketChannel)
-            {
-                res++;
-            }
-        }
-        return res;
-    }
+    /**下线处理的过程
+     * 
+     * 1、socket断开,channel断开
+     * 2、userlist表除名，如果可能，给互联用户下线通知 下线的逻辑为广播一下，然后让其他人做对比......
+     * 3、数据库进行更新
+     * 4、日志记录
+     * 
+    **/
+    private void clientDisconnect(Map<String, SocketChannel> userList,Map<SocketChannel,String> userDeleteList,SelectionKey sk) {
+    	
+    		userList.remove(userDeleteList.get(sk.channel())); 
+       //TODO 设计下线格式
+	       try {
+	    	   this.broadCastInfo(selector, (SocketChannel)sk.channel(), "下线");
+	    	   sk.channel().close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	       //TODO 数据库更新
+	       
+	       //TODO 日志记录	       		
+	}
+
+	private void sendToClient(Map<String, SocketChannel> userList,String flag, String info) throws IOException {   			
+		userList.get(flag).write(charset.encode(info));
+	}
     
-    public void BroadCast(Selector selector, SocketChannel except, String content) throws IOException {
+    public void broadCastInfo(Selector selector, SocketChannel selfChannel, String info) throws IOException {
         //广播数据到所有的SocketChannel中
         for(SelectionKey key : selector.keys())
         {
             Channel targetchannel = key.channel();
             //如果except不为空，不回发给发送此内容的客户端
-            if(targetchannel instanceof SocketChannel && targetchannel!=except)
+            if(targetchannel instanceof SocketChannel && targetchannel!=selfChannel)
             {
                 SocketChannel dest = (SocketChannel)targetchannel;
-                dest.write(charset.encode(content));
+                dest.write(charset.encode(info));
             }
         }
     }
+
     
     public static void main(String[] args) throws IOException 
     {

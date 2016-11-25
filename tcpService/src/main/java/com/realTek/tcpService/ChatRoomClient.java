@@ -35,15 +35,8 @@ public class ChatRoomClient {
         //开辟一个新线程来读取从服务器端的数据
         new Thread(new ClientThread()).start();
         //在主线程中 从键盘读取数据输入到服务器端
-        Scanner scan = new Scanner(System.in);
         Data data = new Data();
-        Data data2 = new Data();
-        data2.setCommand("2");
-        data2.setFlag("2");
-        data2.setMsg("2");  
-        data.setCommand("0");
-        data.setFlag("0");
-        data.setMsg(data2);
+
         while(true)
         {
             sc.write(charset.encode(gson.toJson(data)));//sc既能写也能读，这边是写
