@@ -190,7 +190,7 @@ public class ChatRoomServer {
 			e.printStackTrace();
 		}
 	       //TODO 数据库更新
-	       
+	       //这里对数据库的操作以后再做......，即下线的影响，以后再处理......
 	       //TODO 日志记录	       		
 	}
 
