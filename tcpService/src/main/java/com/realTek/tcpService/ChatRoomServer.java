@@ -9,6 +9,8 @@ import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -32,12 +34,13 @@ import com.google.gson.JsonSyntaxException;
 public class ChatRoomServer {
 	private Gson gson =new Gson();  
     private Selector selector = null;
+	SimpleDateFormat formatTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
     static final int port = 9999;
     private Charset charset = Charset.forName("UTF-8");
     private int  bufferSize = 1024;
-    private static String msgToServer ="1";
+    private static String msgToServer ="0";
     private static String msgBroadcast ="123456";
-    
+    private static String msgToSelf ="654321";  
     private static String splitSymble ="#";
     //记录连接对象 自己的flag ---自己的channel
     private Map<String, SocketChannel>  userList= new HashMap<String, SocketChannel>();
@@ -83,7 +86,7 @@ public class ChatRoomServer {
             sc.register(selector, SelectionKey.OP_READ);
             //将此对应的channel设置为准备接受其他客户端请求,加入一个新的客户端
             sk.interestOps(SelectionKey.OP_ACCEPT);
-            System.out.println("Server is accepted from a new client :" + sc.getRemoteAddress());
+            System.out.println("time:"+formatTime.format(new Date())+", Server is accepted from a new client :" + sc.getRemoteAddress());
         }
         //处理来自客户端的数据读取请求
         if(sk.isReadable())
@@ -92,13 +95,14 @@ public class ChatRoomServer {
             SocketChannel sc = (SocketChannel)sk.channel();
            //获取数据
             ByteBuffer buff = ByteBuffer.allocate(bufferSize);
-            StringBuilder content = new StringBuilder();
+            String content = null;
             try
             {
+
                 while(sc.read(buff) > 0)
                 {
                     buff.flip();
-                    content.append(charset.decode(buff));                
+                    content=charset.newDecoder().decode(buff).toString();           
                 }
                 //一下的断开方法，仅仅对socket有效好像是，那客户端就通过socket来做吧.....服务器就改动这个.....
                 if(sc.read(buff) == -1){
@@ -107,14 +111,15 @@ public class ChatRoomServer {
                     sc.close();
                     return false;
                 }
-                System.out.println("Server is listening from client " + sc.getRemoteAddress() + " data rev is: " + content);
+                System.out.println("time:"+formatTime.format(new Date())+" data:"+content+" time:");
+                System.out.println("Server is listening from client " + sc.getRemoteAddress());
                 //将此对应的channel设置为准备下一次接受数据
                 sk.interestOps(SelectionKey.OP_READ);
             }
             catch (IOException io)
             {
                 sk.cancel();
-                System.out.println("read or write error");
+                System.out.println("read or write error "+io);
                 if(sk.channel() != null)
                 {
                     sk.channel().close();
@@ -128,8 +133,10 @@ public class ChatRoomServer {
             {
             	Data reciveData = null;
             	try{  	
-            		reciveData = gson.fromJson(content.toString(), Data.class);
-            		System.out.println("recive info is "+reciveData.getFlag());
+            		//String [] buffer =content.split("$");
+            		//然后在这处理？
+            		reciveData = gson.fromJson(content, Data.class);
+            		//System.out.println("recive info is "+reciveData.getFlag());
             	}catch (JsonSyntaxException e)
                 {
             		System.out.println("data is not format");
@@ -140,14 +147,22 @@ public class ChatRoomServer {
         		//处理初次连接
         		if(flag[0].equals(msgToServer)){
         			//初次连接，即为通道进行注册
+        			System.out.println("meg info :"+flag[0]);
         			userList.put(flag[1], sc);
         			userDeleteList.put(sc, flag[1]);
         		//处理广播主要是服务器的控制处理，比如发送信息什么的....
         		}else if(flag[0].equals(msgBroadcast)){
         			//直接进行转发即可
         			this.broadCastInfo(selector, sc, content.toString());
-        		//处理互相之间的连接
-        		}else{
+        		//返回给自身
+        		}else if(flag[0].equals(msgToSelf)){
+        			System.out.println("数据返回自身"+" time:"+formatTime.format(new Date()));
+        			//buff.flip(); 以后再处理吧.....
+        			sc.write(charset.encode((content+'\n').toString()));
+        			//sc.write(ByteBuffer.wrap((content+'\n').getBytes()));
+        		}
+        			//处理互相之间的连接
+        		else{
         			if(!userList.containsKey(flag)){
                         sk.channel().close();
                         System.out.println("client disconnection activity" + sc.socket().getRemoteSocketAddress());
@@ -195,7 +210,7 @@ public class ChatRoomServer {
 	}
 
 	private void sendToClient(Map<String, SocketChannel> userList,String flag, String info) throws IOException {   			
-		userList.get(flag).write(charset.encode(info));
+		userList.get(flag).write(charset.encode(info+'\n'));
 	}
     
     public void broadCastInfo(Selector selector, SocketChannel selfChannel, String info) throws IOException {
@@ -207,7 +222,7 @@ public class ChatRoomServer {
             if(targetchannel instanceof SocketChannel && targetchannel!=selfChannel)
             {
                 SocketChannel dest = (SocketChannel)targetchannel;
-                dest.write(charset.encode(info));
+                dest.write(charset.encode(info+'\n'));
             }
         }
     }
