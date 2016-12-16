@@ -1,6 +1,9 @@
 package com.realTek.tcpService;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channel;
@@ -12,13 +15,14 @@ import java.nio.charset.Charset;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
+import com.google.gson.reflect.TypeToken;
 /**
  * 网络多客户端聊天室
  * 功能1： 客户端通过Java NIO连接到服务端，支持多客户端的连接
@@ -37,11 +41,12 @@ public class ChatRoomServer {
 	SimpleDateFormat formatTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
     static final int port = 9999;
     private Charset charset = Charset.forName("UTF-8");
-    private int  bufferSize = 1024;
+    private int  bufferSize = 4096; //注意区块的大小
     private static String msgToServer ="0";
     private static String msgBroadcast ="123456";
     private static String msgToSelf ="654321";  
     private static String splitSymble ="#";
+    private static double errorTime = 0;
     //记录连接对象 自己的flag ---自己的channel
     private Map<String, SocketChannel>  userList= new HashMap<String, SocketChannel>();
     //记录连接对象 自己的channel ---自己的flag
@@ -96,13 +101,17 @@ public class ChatRoomServer {
            //获取数据
             ByteBuffer buff = ByteBuffer.allocate(bufferSize);
             String content = null;
+            BufferedReader in;
             try
             {
 
                 while(sc.read(buff) > 0)
                 {
                     buff.flip();
-                    content=charset.newDecoder().decode(buff).toString();           
+                    content=charset.newDecoder().decode(buff).toString().trim(); 
+                    //这里感觉用in，也不太对，容易出问题.......，比如有的buff中的数据，只读到一个.....
+                    //in = new BufferedReader(new InputStreamReader(new ByteArrayInputStream(buff.array())));
+                    //content =in.readLine();
                 }
                 //一下的断开方法，仅仅对socket有效好像是，那客户端就通过socket来做吧.....服务器就改动这个.....
                 if(sc.read(buff) == -1){
@@ -111,8 +120,7 @@ public class ChatRoomServer {
                     sc.close();
                     return false;
                 }
-                System.out.println("time:"+formatTime.format(new Date())+" data:"+content+" time:");
-                System.out.println("Server is listening from client " + sc.getRemoteAddress());
+                //System.out.println("Server is listening from client " + sc.getRemoteAddress());
                 //将此对应的channel设置为准备下一次接受数据
                 sk.interestOps(SelectionKey.OP_READ);
             }
@@ -129,56 +137,73 @@ public class ChatRoomServer {
                     return false;
                 }
             }
-            if(content.length() > 0)
+            //大于一定的字节才进行处理
+            if(content.length() > 5)
             {
+            	//List<Data> reciveData = null;
             	Data reciveData = null;
-            	try{  	
-            		//String [] buffer =content.split("$");
-            		//然后在这处理？
-            		reciveData = gson.fromJson(content, Data.class);
-            		//System.out.println("recive info is "+reciveData.getFlag());
-            	}catch (JsonSyntaxException e)
-                {
-            		System.out.println("data is not format");
-            		return false;
-                }
-            	//获取标志
-            	String[] flag = reciveData.getFlag().split(splitSymble);
-        		//处理初次连接
-        		if(flag[0].equals(msgToServer)){
-        			//初次连接，即为通道进行注册
-        			System.out.println("meg info :"+flag[0]);
-        			userList.put(flag[1], sc);
-        			userDeleteList.put(sc, flag[1]);
-        		//处理广播主要是服务器的控制处理，比如发送信息什么的....
-        		}else if(flag[0].equals(msgBroadcast)){
-        			//直接进行转发即可
-        			this.broadCastInfo(selector, sc, content.toString());
-        		//返回给自身
-        		}else if(flag[0].equals(msgToSelf)){
-        			System.out.println("数据返回自身"+" time:"+formatTime.format(new Date()));
-        			//buff.flip(); 以后再处理吧.....
-        			sc.write(charset.encode((content+'\n').toString()));
-        			//sc.write(ByteBuffer.wrap((content+'\n').getBytes()));
-        		}
-        			//处理互相之间的连接
-        		else{
-        			if(!userList.containsKey(flag)){
-                        sk.channel().close();
-                        System.out.println("client disconnection activity" + sc.socket().getRemoteSocketAddress());
-                        //错误通知，并更新这里，并更新数据库
-                        sc.close();
-                        return false;	
-        			}
-        			try {
-        				
-        				this.sendToClient(userList,flag[0],content.toString());
-        			} catch (IOException e) {
-        				System.out.println("应该不会出错，大概吧..");
-        				//处理出错，以后碰着再说吧.....
-        				e.printStackTrace();
-        			}
-        		}
+            	System.out.println("*******************************************************"); 
+            	System.out.println("data is:");
+            	System.out.println(content);
+                System.out.println("服务器收到的时间："+formatTime.format(new Date()));
+            	String[] msgs = content.trim().split("&");
+            	System.out.println("数据点数目为："+msgs.length);
+            	//分割每一个字符，并释放
+            	for(int i =0;i<msgs.length;i++){
+                	try{  	
+                		//String [] buffer =content.split("$");
+                		//然后在这处理？
+                		//reciveData = gson.fromJson(content, new TypeToken<List<Data>>(){}.getType());
+                		reciveData = gson.fromJson(msgs[i], Data.class);
+                		//System.out.println("recive info is "+reciveData.getFlag());
+                	}catch (JsonSyntaxException e)
+                    {
+                		errorTime++;
+                		System.out.println("error info "+e);
+                		System.out.println("data format error time is :"+errorTime);
+                		//跳过当前的数据点不处理.....
+                		continue;
+                    }
+                	//处理对应的数据点
+                    	//获取标志
+                    	String[] flag = reciveData.getFlag().split(splitSymble);
+                		//处理初次连接
+                		if(flag[0].equals(msgToServer)){
+                			//初次连接，即为通道进行注册
+                			System.out.println("meg info :"+flag[0]);
+                			userList.put(flag[1], sc);
+                			userDeleteList.put(sc, flag[1]);
+                		//处理广播主要是服务器的控制处理，比如发送信息什么的....
+                		}else if(flag[0].equals(msgBroadcast)){
+                			//直接进行转发即可
+                			this.broadCastInfo(selector, sc, msgs[i]);
+                		//返回给自身
+                		}else if(flag[0].equals(msgToSelf)){
+                			//buff.flip(); 以后再处理吧.....
+                			sc.write(charset.encode((msgs[i])+"&"));
+                			System.out.println("数据返回自身时间："+formatTime.format(new Date()));
+                			//sc.write(ByteBuffer.wrap((content+'\n').getBytes()));
+                		}
+                			//处理互相之间的连接
+                		else{
+                			if(!userList.containsKey(flag)){
+                                sk.channel().close();
+                                System.out.println("client disconnection activity" + sc.socket().getRemoteSocketAddress());
+                                //错误通知，并更新这里，并更新数据库
+                                sc.close();
+                                return false;	
+                			}
+                			try {
+                				
+                				this.sendToClient(userList,flag[0],msgs[i]);
+                			} catch (IOException e) {
+                				System.out.println("可能会出现读取出错，但是不用管.....");
+                				//处理出错，以后碰着再说吧.....
+                				e.printStackTrace();
+                			}
+                		      		
+                	}		
+            	}
             }
             
         }
@@ -210,7 +235,7 @@ public class ChatRoomServer {
 	}
 
 	private void sendToClient(Map<String, SocketChannel> userList,String flag, String info) throws IOException {   			
-		userList.get(flag).write(charset.encode(info+'\n'));
+		userList.get(flag).write(charset.encode(info+"&"));
 	}
     
     public void broadCastInfo(Selector selector, SocketChannel selfChannel, String info) throws IOException {
@@ -222,7 +247,7 @@ public class ChatRoomServer {
             if(targetchannel instanceof SocketChannel && targetchannel!=selfChannel)
             {
                 SocketChannel dest = (SocketChannel)targetchannel;
-                dest.write(charset.encode(info+'\n'));
+                dest.write(charset.encode(info+'&'));
             }
         }
     }
